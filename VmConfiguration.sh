@@ -155,7 +155,7 @@ sed -i 's/#dbms.connector.bolt.tls_level=DISABLED/dbms.connector.bolt.tls_level=
 sed -i 's-/var/lib/neo4j/data-/datadrive/data-' /etc/neo4j/neo4j.template
 sed -i 's-#dbms.memory.heap.initial_size=512m-dbms.memory.heap.initial_size=31000m-' /etc/neo4j/neo4j.conf
 sed -i 's-#dbms.memory.heap.max_size=512m-dbms.memory.heap.max_size=31000m-' /etc/neo4j/neo4j.conf
-sed -i 's-#dbms.memory.pagecache.size=10g-dbms.memory.pagecache.size=20g-' /etc/neo4j/neo4j.conf
+sed -i 's-#dbms.memory.pagecache.size=10g-dbms.memory.pagecache.size=10g-' /etc/neo4j/neo4j.conf
 sed -i 's-#dbms.logs.query.enabled-dbms.logs.query.enabled-' /etc/neo4j/neo4j.conf
 sed -i 's-#dbms.logs.query.threshold=0-dbms.logs.query.threshold=10s-' /etc/neo4j/neo4j.conf
 sed -i 's-#dbms.logs.query.time_logging_enabled-dbms.logs.query.time_logging_enabled-' /etc/neo4j/neo4j.conf
