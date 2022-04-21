@@ -6,6 +6,7 @@ numberOfReplicaVms=$3
 initialDiscoveryMembers=$4
 hostMapping=$5
 publicHostname=$6
+nodeNumber=$7
 
 echo "Turning off firewalld"
 systemctl stop firewalld
@@ -78,6 +79,25 @@ rm private.key
 rm cert.pfx 
 echo 'Certificates work is done'
 
+
+echo 'Starting Prometheus Setup'
+wget https://github.com/prometheus/prometheus/releases/download/v2.34.0/prometheus-2.34.0.linux-amd64.tar.gz
+tar xvfz prometheus-*.tar.gz
+cd prometheus-2.34.0.linux-amd64 
+tee -a prometheus.yml << EOF
+  - job_name: "prometheus_neo4j"
+
+   # metrics_path defaults to '/metrics'
+   # scheme defaults to 'http'.
+
+    static_configs:
+      - targets: ["localhost:2004"]
+EOF
+
+./prometheus --config.file=prometheus.yml &
+#need to create it as a service on VM restarts 
+
+echo 'Prometheus Setup Done'
 # This link was followed to help mount the drive. https://docs.microsoft.com/en-us/azure/virtual-machines/linux/add-disk 
 echo 'Mounting External Drive to Neo4j'
 
@@ -87,13 +107,13 @@ diskNames=($DISKS)
 
 for index in "${!diskNames[@]}" ; do
    if [ -z "${diskNames[$index]}" ]; then
-    exit 0
+    break
    fi
    #This will check the filesystem type of a device, if it contains the word data it is not partioned
    #If the disk is already partioned then we need to exit since this is most probably another run of the deployment.
    DISKPARTIONED=`file -sL "/dev/${diskNames[$index]}" | grep -i 'data'`
    if [ -z "$DISKPARTIONED" ]; then
-      exit 0
+      break
    fi
    echo 'Formatting the drive'
    
@@ -136,51 +156,46 @@ sed -i s/#causal_clustering.minimum_core_cluster_size_at_runtime=3/causal_cluste
 
 sed -i s/#dbms.routing.enabled=false/dbms.routing.enabled=true/g /etc/neo4j/neo4j.conf
 
-echo "Adding entries to /etc/hosts to route cluster traffic internally..."
-IFS=',' hostsArray=($hostMapping)
-> /etc/hosts
-for element in "${hostsArray[@]}";
-do
-   readarray -d ^ -t domains<<< "$element"
-   ip=`nslookup ${domains[0]} | awk -F': ' 'NR==6 { print $2 } '`
-   echo $ip ${domains[1]}>>/etc/hosts;
-done
-
 echo Turning on SSL...
 sed -i 's/dbms.connector.https.enabled=false/dbms.connector.https.enabled=true/g' /etc/neo4j/neo4j.conf
 sed -i 's/#dbms.connector.bolt.tls_level=DISABLED/dbms.connector.bolt.tls_level=OPTIONAL/g' /etc/neo4j/neo4j.conf
 
 #Map Neo4j to the new data folder we created. Neo4j restarts automatically when it detects changes on the template file. 
 
-sed -i 's-/var/lib/neo4j/data-/datadrive/data-' /etc/neo4j/neo4j.template
+sed -i 's-/var/lib/neo4j/data-/datadrive/data-' /etc/neo4j/neo4j.conf
 sed -i 's-#dbms.memory.heap.initial_size=512m-dbms.memory.heap.initial_size=31000m-' /etc/neo4j/neo4j.conf
 sed -i 's-#dbms.memory.heap.max_size=512m-dbms.memory.heap.max_size=31000m-' /etc/neo4j/neo4j.conf
-sed -i 's-#dbms.memory.pagecache.size=10g-dbms.memory.pagecache.size=10g-' /etc/neo4j/neo4j.conf
+sed -i 's-#dbms.memory.pagecache.size=10g-dbms.memory.pagecache.size=20g-' /etc/neo4j/neo4j.conf
 sed -i 's-#dbms.logs.query.enabled-dbms.logs.query.enabled-' /etc/neo4j/neo4j.conf
 sed -i 's-#dbms.logs.query.threshold=0-dbms.logs.query.threshold=10s-' /etc/neo4j/neo4j.conf
 sed -i 's-#dbms.logs.query.time_logging_enabled-dbms.logs.query.time_logging_enabled-' /etc/neo4j/neo4j.conf
 sed -i 's-#dbms.logs.query.page_logging_enabled-dbms.logs.query.page_logging_enabled-' /etc/neo4j/neo4j.conf
 
+# below Query update the property value if exist else will append the property in end 
+# Format : sed -i -e '/^\(KEY_NAME=\).*/{s//\1NEW_VALUE/;:a;n;ba;q}' -e '$aKEY_NAME=INITIAL_VALUE' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(dbms.track_query_cpu_time=\).*/{s//\1true/;:a;n;ba;q}' -e '$adbms.track_query_cpu_time=true' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(metrics.enabled=\).*/{s//\1true/;:a;n;ba;q}' -e '$ametrics.enabled=true' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(metrics.namespaces.enabled=\).*/{s//\1true/;:a;n;ba;q}' -e '$ametrics.namespaces.enabled=true' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(metrics.prometheus.enabled=\).*/{s//\1true/;:a;n;ba;q}' -e '$ametrics.prometheus.enabled=true' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(metrics.prefix=\).*/{s//\1neo4j${dbms_mode}${nodeNumber}/;:a;n;ba;q}' -e '$ametrics.prefix=neo4j${dbms_mode}${nodeNumber}' /etc/neo4j/neo4j.conf
+
+sed -i -e '/^\(metrics.filter=\).*/{s//\1neo4j.causal_clustering*,neo4j.dbms.page_cache.evictions/;:a;n;ba;q}' -e '$ametrics.filter=neo4j.causal_clustering*,neo4j.dbms.page_cache.evictions' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(metrics.csv.enabled=\).*/{s//\1true/;:a;n;ba;q}' -e '$ametrics.csv.enabled=true' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(metrics.csv.interval=\).*/{s//\130s/;:a;n;ba;q}' -e '$ametrics.csv.interval=30s' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(metrics.csv.rotation.size=\).*/{s//\110M/;:a;n;ba;q}' -e '$ametrics.csv.rotation.size=10M' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(metrics.csv.rotation.keep_number=\).*/{s//\15/;:a;n;ba;q}' -e '$ametrics.csv.rotation.keep_number=5' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(metrics.csv.rotation.compression=\).*/{s//\1zip/;:a;n;ba;q}' -e '$ametrics.csv.rotation.compression=zip' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(dbms.routing.default_router=\).*/{s//\1SERVER/;:a;n;ba;q}' -e '$adbms.routing.default_router=SERVER' /etc/neo4j/neo4j.conf
+sed -i -e '/^\(dbms.allow_upgrade=\).*/{s//\1true/;:a;n;ba;q}' -e '$adbms.allow_upgrade=true' /etc/neo4j/neo4j.conf
+
 tee -a /etc/neo4j/neo4j.conf << EOF
 
-
-dbms.track_query_cpu_time=true
-metrics.enabled=true
-metrics.namespaces.enabled=true
-metrics.filter=neo4j.causal_clustering*,neo4j.dbms.page_cache.evictions
-metrics.csv.enabled=true
-metrics.csv.interval=60s
-metrics.csv.rotation.size=10M
-metrics.csv.rotation.keep_number=7
-metrics.csv.rotation.compression=zip
 dbms.jvm.additional=-Dlog4j2.formatMsgNoLookups=true
 dbms.jvm.additional=-Dlog4j2.disable.jmx=true
-dbms.routing.default_router=SERVER
 EOF
 
+
 echo "Restart Neo4j"
-
-
 
 #Force Neo4j.service to restart to ensure the changes on the template file take place. In some cases, the service didnt restart
 #sudo systemctl restart neo4j
